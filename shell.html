@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Experiments</title>
+  </head>
+
+  <body>
+
+    <canvas id="canvas" width="800" height="600" oncontextmenu="event.preventDefault()"></canvas>
+    
+    <div class="input_box">&nbsp;</div>
+    <div class="input_box">
+      <button id="test_btn" class="em_button">Toggle Motion</button>
+    </div>
+
+    <textarea class="em_textarea" id="output" rows="8" cols="50"></textarea>
+
+
+
+    <script type='text/javascript'>
+
+
+    // vertex shader. Test shifting uv coords using counter from web assembly module.
+    var vertex_shader_code = `
+      precision mediump float;
+
+      attribute vec4 a_position;
+      attribute vec2 a_texcoord;
+
+      varying vec2 v_texcoord;
+
+      uniform vec4 u_translate;
+
+      uniform float u_time;
+
+      void main() {
+        gl_Position = u_translate + a_position;
+        v_texcoord = a_texcoord + vec2(-u_time * 0.2, 0);
+      }
+    `;
+    
+    // fragment shader.
+    var fragment_shader_code = `
+      precision mediump float;
+
+      varying vec2 v_texcoord;
+
+      uniform sampler2D u_texture;
+
+      uniform float u_time;
+
+      void main() {
+
+        float cycle = (sin(u_time) + 1.0) / 2.0;
+        
+        vec4 textureColor = texture2D(u_texture, v_texcoord);
+        vec4 tintColor = vec4(cycle, cycle, 1.0, 1.0);
+
+        gl_FragColor = vec4(textureColor.x * tintColor.x, textureColor.y * tintColor.y, textureColor.z * tintColor.z, textureColor.w);
+      }
+    `;
+    
+
+
+    var img = null; // HTMLImageElement
+    var canvas = null; // HTMLCanvasElement
+    // var ctx = null; // CanvasRenderingContext2D
+
+    var gl = null; // WebGLRenderingContext
+    var program = null; // WebGLProgram
+    var texture = null; // WebGLTexture
+
+    var image_width = 0;
+    var image_height = 0;
+
+    var vertex_texture_buffer = null; // WebGLBuffer
+
+    var a_texcoord_location = null; // GLint
+    var a_position_location = null; // GLint
+    var u_translate_location = null; // WebGLUniformLocation
+    var u_texture_location = null; // WebGLUniformLocation
+
+    var u_time_location = null;
+    
+    // x, y, u, v
+    var vertex_texture_data = new Float32Array([
+         0.64,  0.426, 1.0, 0.0,
+        -0.64,  0.426, 0.0, 0.0,
+         0.64, -0.426, 1.0, 1.0,
+        -0.64, -0.426, 0.0, 1.0,
+        -0.64,  0.426, 0.0, 0.0,
+         0.64, -0.426, 1.0, 1.0
+    ]);
+    
+    const FLOAT32_BYTE_SIZE = 4;          // size of a 32 bit float
+    const STRIDE = FLOAT32_BYTE_SIZE * 4; // there are 4 elements for every vertex.  x, y, u, v
+    const XY_OFFSET = FLOAT32_BYTE_SIZE * 0;
+    const UV_OFFSET = FLOAT32_BYTE_SIZE * 2;
+    
+    // runs on update loop
+    function Update( count ) {
+      
+      if( img == null ) {
+        return;
+      }
+
+      if( image_width == 0 ) {
+        return;
+      }
+
+      gl.uniform4fv(u_translate_location, [0.0, 0.0, 0.0, 0.0]);
+
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      gl.uniform1fv(u_time_location, [count]);
+    }
+
+    function ModuleLoaded() {
+      canvas = document.getElementById('canvas');
+      // ctx = canvas.getContext("2d");
+
+      gl = canvas.getContext("webgl", { alpha: false });
+      if (!gl) {
+        console.log("No WebGL support!");
+        return;
+      }
+
+      // turn on alpha blending
+      gl.blendFunc( gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA );
+      gl.enable( gl.BLEND );
+      
+      // compile shaders and store in program variable
+      var vertex_shader = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vertex_shader, vertex_shader_code);
+      gl.compileShader(vertex_shader);
+
+      var fragment_shader = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fragment_shader, fragment_shader_code);
+      gl.compileShader(fragment_shader);
+
+      program = gl.createProgram();
+      gl.attachShader(program, vertex_shader);
+      gl.attachShader(program, fragment_shader);
+      gl.linkProgram(program);
+      gl.useProgram(program);
+
+      a_texcoord_location = gl.getAttribLocation(program, "a_texcoord");
+      a_position_location = gl.getAttribLocation(program, "a_position");
+      u_translate_location = gl.getUniformLocation(program, "u_translate");
+      u_texture_location = gl.getUniformLocation(program, "u_texture");
+      u_time_location = gl.getUniformLocation(program, "u_time");
+
+      vertex_texture_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertex_texture_buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertex_texture_data, gl.STATIC_DRAW);
+
+      gl.enableVertexAttribArray(a_position_location);
+      gl.vertexAttribPointer(a_position_location, 2, gl.FLOAT, false, STRIDE, XY_OFFSET);
+      gl.enableVertexAttribArray(a_texcoord_location);
+      gl.vertexAttribPointer(a_texcoord_location, 2, gl.FLOAT, false, STRIDE, UV_OFFSET);
+
+      texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      
+      img = new Image();
+      img.addEventListener('load', () => {
+        image_width = img.width;
+        image_height = img.height;
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        this.Update(0);
+      });
+
+      img.src = "testimg.png";
+      gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    }
+
+    function InitWrappers() {
+        var test = Module.cwrap('test', 'undefined');
+        document.getElementById("test_btn").onclick = function() {
+            if( test != null ) {
+                test();
+            }
+        }
+    }
+
+    function runBefore() {
+      console.log("run before");
+      this.InitWrappers();
+    }
+
+    function runAfter() {
+      console.log("run after");
+      this.ModuleLoaded();
+    }
+
+    var Module = {
+          preRun: [runBefore],
+          postRun: [runAfter],
+          print: (function() {
+            var element = document.getElementById('output');
+            if (element) element.value = ''; // clear browser cache
+            return function(text) {
+              if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+              // The printf statement in C is currently writing to a textarea.
+              console.log(text);
+              if (element) {
+                element.value += text + "\n";
+                element.scrollTop = element.scrollHeight; // focus on bottom
+              }
+            };
+          })(),
+          printErr: function(text) {
+            if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+            if (0) { // XXX disabled for safety typeof dump == 'function') {
+              dump(text + '\n'); // fast, straight to the real console
+            } else {
+              console.error(text);
+            }
+          },
+          canvas: (function() {
+            var canvas = document.getElementById('canvas');
+            // As a default initial behavior, pop up an alert when webgl context is lost. To make your
+            // application robust, you may want to override this behavior before shipping!
+            // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
+            canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
+            return canvas;
+          })(),
+          setStatus: function(text) {
+            if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
+            if (text === Module.setStatus.last.text) return;
+            var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+            var now = Date.now();
+            if (m && now - Module.setStatus.last.time < 30) return; // if this is a progress update, skip it if too soon
+            Module.setStatus.last.time = now;
+            Module.setStatus.last.text = text;
+            if (m) {
+              text = m[1];
+            } 
+            // console.log("status: " + text);
+          },
+          totalDependencies: 0,
+          monitorRunDependencies: function(left) {
+            this.totalDependencies = Math.max(this.totalDependencies, left);
+            Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+          }
+        };
+        Module.setStatus('Downloading...');
+        window.onerror = function() {
+          Module.setStatus('Exception thrown, see JavaScript console');
+          Module.setStatus = function(text) {
+            if (text) Module.printErr('[post-exception status] ' + text);
+          };
+      };
+
+    </script>
+
+    {{{ SCRIPT }}}
+  </body>
+</html>
